@@ -71,7 +71,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 # hermes process, the dashboard, and per-profile gateways.
 RUN apt-get -o Acquire::Retries=3 update && \
     apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-    ca-certificates curl iputils-ping python3 python-is-python3 ripgrep ffmpeg gcc g++ make cmake python3-dev python3-venv libffi-dev libolm-dev libatomic1 procps git openssh-client docker-cli xz-utils && \
+    ca-certificates curl iputils-ping python3 python-is-python3 ripgrep ffmpeg gcc g++ make cmake python3-dev python3-venv libffi-dev libolm-dev libatomic1 procps git openssh-client docker-cli xz-utils xvfb xauth && \
     rm -rf /var/lib/apt/lists/*
 
 # Bot Screen (opt-in): TigerVNC + the Xfce components + a headed chromium, so a
@@ -284,7 +284,12 @@ RUN cd plugins/platforms/photon/sidecar && \
 COPY pyproject.toml uv.lock ./
 RUN touch ./README.md
 RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock --extra azure-identity --extra matrix --extra google-chat
-RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir "playwright==1.63.0"
+# Playwright 1.63.0 is exact-pinned for the migrated skill, so opt only this
+# package out of uv's 14-day quarantine. Install Chromium through the Python
+# CLI as well: the Node 1.62.1 install above uses a different browser revision.
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
+        --exclude-newer-package "playwright=false" "playwright==1.63.0" && \
+    /opt/hermes/.venv/bin/python -m playwright install --with-deps chromium
 
 # ---------- Frontend build (cached independently from Python source) ----------
 # Copy only the frontend source trees first so that Python-only changes don't
