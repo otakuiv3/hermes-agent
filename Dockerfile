@@ -213,7 +213,7 @@ ENV npm_config_install_links=false
 
 RUN npm install --prefer-offline --no-audit --fetch-retries=5 && \
     for i in 1 2 3; do \
-        npx playwright install --with-deps chromium --only-shell && break || \
+        npx playwright install --with-deps chromium && break || \
         { [ "$i" = 3 ] && exit 1; echo "playwright install failed (attempt $i); retrying in 10s"; sleep 10; }; \
     done && \
     npm cache clean --force
@@ -283,6 +283,7 @@ RUN cd plugins/platforms/photon/sidecar && \
 COPY pyproject.toml uv.lock ./
 RUN touch ./README.md
 RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock --extra azure-identity --extra matrix --extra google-chat
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir "playwright==1.63.0"
 
 # ---------- Frontend build (cached independently from Python source) ----------
 # Copy only the frontend source trees first so that Python-only changes don't
