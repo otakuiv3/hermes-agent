@@ -380,6 +380,7 @@ fi
 # containing shell metacharacters. PR #30136 review item O2.
 as_hermes mkdir -p \
     "$HERMES_HOME/backups" \
+    "$HERMES_HOME/.config/himalaya" \
     "$HERMES_HOME/cron" \
     "$HERMES_HOME/sessions" \
     "$HERMES_HOME/logs" \
@@ -394,6 +395,10 @@ as_hermes mkdir -p \
     "$HERMES_HOME/pairing" \
     "$HERMES_HOME/platforms/pairing" \
     "$HERMES_HOME/lazy-packages"
+
+# Himalaya may store account credentials in its config. Keep its persistent
+# directory private without reading, replacing, or seeding config.toml.
+as_hermes chmod 700 "$HERMES_HOME/.config/himalaya"
 
 # --- Install-method stamp ---
 # The 'docker' stamp is baked into the immutable install tree at

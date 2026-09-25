@@ -150,6 +150,27 @@ RUN set -eu; \
     tar -C / -Jxpf /tmp/s6-overlay-symlinks-noarch.tar.xz; \
     rm /tmp/s6-overlay-*.tar.xz /tmp/s6-overlay.sha256
 
+# Himalaya is used by the migrated fulfillment skill. Install the official
+# architecture-specific binary with a pinned version and verified checksum;
+# account configuration remains on the persistent HERMES_HOME volume.
+ARG HIMALAYA_VERSION=2.1.0
+ARG HIMALAYA_X86_64_SHA256=683a2ab8e1534f01e6bda3a69e204d564c31fbfbe20511fc7bc60b67f2e85884
+ARG HIMALAYA_AARCH64_SHA256=c41adab4bc220ba816cdbf865a5df8dc3b358b39ec58b4be0ed2f64e46b1d182
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+        amd64) himalaya_arch="x86_64"; himalaya_sha="${HIMALAYA_X86_64_SHA256}" ;; \
+        arm64) himalaya_arch="aarch64"; himalaya_sha="${HIMALAYA_AARCH64_SHA256}" ;; \
+        *) echo "Unsupported TARGETARCH=${TARGETARCH} for Himalaya" >&2; exit 1 ;; \
+    esac; \
+    archive="/tmp/himalaya.${himalaya_arch}-linux.tgz"; \
+    curl -fsSL --retry 3 -o "${archive}" \
+        "https://github.com/pimalaya/himalaya/releases/download/v${HIMALAYA_VERSION}/himalaya.${himalaya_arch}-linux.tgz"; \
+    printf '%s  %s\n' "${himalaya_sha}" "${archive}" | sha256sum -c -; \
+    tar -xzf "${archive}" -C /usr/local/bin himalaya; \
+    chmod 0755 /usr/local/bin/himalaya; \
+    himalaya --version; \
+    rm "${archive}"
+
 # #34192 / #66679: backward-compat shim for orchestration templates that
 # still reference the legacy /usr/bin/tini entrypoint (Hostinger's
 # 'Hermes WebUI' catalog, NAS compose projects that preserve an old
@@ -285,10 +306,12 @@ COPY pyproject.toml uv.lock ./
 RUN touch ./README.md
 RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock --extra azure-identity --extra matrix --extra google-chat
 # Playwright 1.63.0 is exact-pinned for the migrated skill, so opt only this
-# package out of uv's 14-day quarantine. Install Chromium through the Python
-# CLI as well: the Node 1.62.1 install above uses a different browser revision.
+# package out of uv's 14-day quarantine. The skill uses the Stealth 2.x API,
+# which is pinned independently. Install Chromium through the Python CLI as
+# well: the Node 1.62.1 install above uses a different browser revision.
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir \
-        --exclude-newer-package "playwright=false" "playwright==1.63.0" && \
+        --exclude-newer-package "playwright=false" \
+        "playwright==1.63.0" "playwright-stealth==2.0.3" && \
     /opt/hermes/.venv/bin/python -m playwright install --with-deps chromium
 
 # ---------- Frontend build (cached independently from Python source) ----------
@@ -410,6 +433,7 @@ ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
 ENV HERMES_TUI_DIR=/opt/hermes/ui-tui
 ENV HERMES_HOME=/opt/data
 ENV HERMES_WRITE_SAFE_ROOT=/opt/data
+ENV HIMALAYA_CONFIG=/opt/data/.config/himalaya/config.toml
 ENV HERMES_DISABLE_LAZY_INSTALLS=1
 # The published image seals /opt/hermes (root-owned, read-only) so a runtime
 # lazy install can't mutate the agent's own venv and brick it. But opt-in
