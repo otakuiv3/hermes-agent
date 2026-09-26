@@ -1272,6 +1272,10 @@ class GatewayInboundMixin:
             return event, source, is_internal
 
     async def _handle_message(self, event: MessageEvent) -> Optional[str]:
+        from gateway.dashboard_bridge import guarded_gateway_message
+        return await guarded_gateway_message(self, event, self._handle_message_admitted)
+
+    async def _handle_message_admitted(self, event: MessageEvent) -> Optional[str]:
         """Handle an incoming message from any platform: auth → command check → running-agent
         interrupt → get/create session → build context → run agent → return response."""
         from gateway.run import _AGENT_PENDING_SENTINEL
@@ -1753,6 +1757,11 @@ class GatewayInboundMixin:
 
     async def _mark_durable_active_turn(self, event: "MessageEvent", session_key: str) -> bool:
         """Persist the exact resolved routing key for this running turn."""
+        from gateway.dashboard_bridge import is_dashboard_source
+        if is_dashboard_source(event.source):
+            # The dashboard has its own durable receipt. Never silently replay
+            # an interrupted tool-using request after a gateway restart.
+            return False
         try:
             token = await self.async_session_store.mark_turn_active(session_key)
         except Exception as exc:

@@ -1315,7 +1315,7 @@ class GatewayNotificationsMixin:
             adapter = self.adapters.get(Platform.API_SERVER)
         if not adapter:
             return False
-        if not adapter_supports_push(adapter):
+        if not adapter_supports_push(adapter, source):
             # Non-push adapter (api_server): its chat_id IS the raw session id, so handle_message would
             # key the wake under a build_session_key() that never matches — self-post instead.
             raw_sid = str(evt.get("origin_session_id") or "").strip() or str(source.chat_id or "")
@@ -1470,7 +1470,7 @@ class GatewayNotificationsMixin:
                 return False
         if adapter is None:
             return False
-        if not adapter_supports_push(adapter):
+        if not adapter_supports_push(adapter, source):
             ensure = getattr(adapter, "_ensure_session_db", None)
             try:
                 if not callable(ensure) or await asyncio.to_thread(ensure) is None:

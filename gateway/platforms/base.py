@@ -3951,6 +3951,12 @@ class BasePlatformAdapter(ABC):
         """Process an incoming message; returns quickly by spawning a background
         task so new messages (and interrupts) can arrive while an agent runs."""
         event._gateway_accepted = False
+        bridge = getattr(getattr(self, "gateway_runner", None), "_dashboard_bridge", None)
+        if bridge is not None and event.internal and bridge.admission.owner is not None:
+            owner = (event.source.platform.value, str(event.source.chat_id))
+            if bridge.admission.owner != owner:
+                from gateway.wake import WakeNotAccepted
+                raise WakeNotAccepted("Gateway is busy; retry the internal notification later")
         if not self._message_handler:
             # No handler = every inbound silently discarded on an adapter that still polls and sends;
             # say so once per adapter (#102260).
@@ -4436,6 +4442,21 @@ class BasePlatformAdapter(ABC):
             self._cleanup_finished_session_task(session_key, interrupt_event)
 
     async def _process_message_background(self, event: MessageEvent, session_key: str) -> None:
+        # Hold the shared lease through final delivery and review-release hooks,
+        # not just through the model call. Existing behavior stays unchanged when
+        # the dashboard transport is disabled.
+        from gateway.dashboard_bridge import guarded_gateway_message
+        runner = getattr(self, "gateway_runner", None)
+        if runner is None or getattr(runner, "_dashboard_bridge", None) is None:
+            return await self._process_message_background_admitted(event, session_key)
+        async def process(admitted_event):
+            await self._process_message_background_admitted(admitted_event, session_key)
+        result = await guarded_gateway_message(runner, event, process)
+        if result:
+            await self.send(str(event.source.chat_id), result)
+            self._cleanup_finished_session_task(session_key, self._active_sessions.get(session_key))
+
+    async def _process_message_background_admitted(self, event: MessageEvent, session_key: str) -> None:
         """Background task that actually processes the message."""
         delivery_attempted = delivery_succeeded = False  # feeds the processing-complete hook
 

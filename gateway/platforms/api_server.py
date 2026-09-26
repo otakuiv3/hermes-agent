@@ -1588,6 +1588,9 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         """(method, path, handler) rows registered by ``connect()`` (a method so multiplex tests
         can assert the /p/<profile>/ mirrors without a listener)."""
         routes: List[tuple] = [
+            ("GET", "/api/dashboard/{account}", self._handle_dashboard),
+            ("POST", "/api/dashboard/{account}", self._handle_dashboard),
+            ("GET", "/api/dashboard/{account}/events", self._handle_dashboard),
             ("GET", "/health", self._handle_health),
             ("GET", "/health/detailed", self._handle_health_detailed),
             ("GET", "/v1/health", self._handle_health),
@@ -3969,7 +3972,24 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             usage["runtime"] = runtime
         return result, usage
 
-    async def _run_agent(
+    async def _run_agent(self, *args, **kwargs):
+        bridge = getattr(self, "_dashboard_bridge", None)
+        if bridge is None:
+            return await self._run_agent_admitted(*args, **kwargs)
+        from gateway.dashboard_bridge import BusyError, _reservation
+        owner = ("api_server", kwargs.get("session_id") or "api-request")
+        try:
+            token = bridge.admission.claim(owner)
+        except BusyError:
+            raise RuntimeError("Hermes is busy; wait for the active request to finish") from None
+        context_token = _reservation.set(token)
+        try:
+            return await self._run_agent_admitted(*args, **kwargs)
+        finally:
+            bridge.admission.release(token)
+            _reservation.reset(context_token)
+
+    async def _run_agent_admitted(
         self, user_message: str, conversation_history: List[Dict[str, str]],
         ephemeral_system_prompt: Optional[str] = None, session_id: Optional[str] = None,
         stream_delta_callback=None, tool_progress_callback=None, tool_start_callback=None,
@@ -4258,6 +4278,13 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             self._app["api_server_adapter"] = self
             if self.gateway_runner is not None:
                 self._app["gateway_runner"] = self.gateway_runner
+                if os.environ.get("HERMES_DASHBOARD_ENABLED", "").lower() in {"1", "true", "yes"}:
+                    from gateway.dashboard_bridge import DashboardBridge
+                    from hermes_constants import get_hermes_home
+                    existing = getattr(self.gateway_runner, "_dashboard_bridge", None)
+                    self._dashboard_bridge = existing or DashboardBridge(self, get_hermes_home() / "dashboard-chat.db")
+                    self._dashboard_bridge.adapter = self
+                    self.gateway_runner._dashboard_bridge = self._dashboard_bridge
             self._track_background_task(asyncio.create_task(self._sweep_orphaned_runs()))
             # Network-accessible + unsandboxed local terminal backend = host-user RCE surface;
             # warn, don't refuse (the operator may have a firewall / strong key).
@@ -4371,7 +4398,43 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         self, chat_id: str, content: str, reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         """Not used — the HTTP request/response cycle handles delivery directly."""
+        bridge = getattr(self, "_dashboard_bridge", None)
+        if bridge and chat_id.startswith("dashboard-"):
+            from gateway.dashboard_bridge import PREFIX
+            message_id = bridge.store.add(chat_id[len(PREFIX):], content)
+            return SendResult(success=True, message_id=message_id)
         return SendResult(success=False, error="API server uses HTTP request/response, not send()")
+
+    async def _handle_dashboard(self, request):
+        from gateway.dashboard_bridge import dashboard_http
+        return await dashboard_http(self, request)
+
+    async def edit_message(self, chat_id, message_id, content, *, finalize=False):
+        bridge = getattr(self, "_dashboard_bridge", None)
+        if bridge and chat_id.startswith("dashboard-"):
+            return SendResult(success=bridge.store.edit(chat_id[len("dashboard-"):], message_id, content), message_id=message_id)
+        return await super().edit_message(chat_id, message_id, content, finalize=finalize)
+
+    async def delete_message(self, chat_id, message_id):
+        bridge = getattr(self, "_dashboard_bridge", None)
+        if bridge and chat_id.startswith("dashboard-"):
+            return bridge.store.delete(chat_id[len("dashboard-"):], message_id)
+        return await super().delete_message(chat_id, message_id)
+
+    async def send_typing(self, chat_id, metadata=None):
+        bridge = getattr(self, "_dashboard_bridge", None)
+        if bridge and chat_id.startswith("dashboard-"):
+            bridge.store.activity(chat_id[len("dashboard-"):], "حمودي يكتب الآن…")
+            return
+        return await super().send_typing(chat_id, metadata=metadata)
+
+    async def _run_processing_hook(self, hook_name, event, *args):
+        result = await super()._run_processing_hook(hook_name, event, *args)
+        bridge = getattr(self, "_dashboard_bridge", None)
+        if bridge and event.source.chat_id.startswith("dashboard-") and hook_name == "on_processing_complete" and args:
+            outcome = getattr(args[0], "value", "failure")
+            bridge.outcomes[event.source.chat_id[len("dashboard-"):]] = "completed" if outcome == "success" else "failed"
+        return result
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         """Return basic info about the API server."""

@@ -27,11 +27,16 @@ WAKE_TURN_TIMEOUT_SECONDS = 600.0
 _RETRY_DELAYS_SECONDS = (2.0, 5.0, 10.0)
 
 
-def adapter_supports_push(adapter: Any) -> bool:
+def adapter_supports_push(adapter: Any, source: Any = None) -> bool:
     """Whether this adapter can push a message to the user after a turn ends. Reads
     ``supports_async_delivery`` off the adapter class rather than the request-scoped contextvar
     (background watchers run outside any bound session context). Adapters that don't declare
     the flag are push-capable."""
+    if source is not None and getattr(adapter, "_dashboard_bridge", None) is not None:
+        from gateway.dashboard_bridge import ACCOUNT_RE, PREFIX
+        chat_id = str(getattr(source, "chat_id", ""))
+        if chat_id.startswith(PREFIX) and ACCOUNT_RE.fullmatch(chat_id[len(PREFIX):]):
+            return True
     return bool(getattr(adapter, "supports_async_delivery", True))
 
 
@@ -96,7 +101,7 @@ async def deliver_wake(adapter: Any, *, text: str, session_id: str = "", source:
     names the served profile that canonically owns a non-push destination; a non-default value is
     delivered in-process under the caller's profile scope (see ``_self_post_chat_completion``).
     Raises on failure so the caller can rewind/retry."""
-    if adapter_supports_push(adapter):
+    if adapter_supports_push(adapter, source):
         if source is None:
             raise ValueError("deliver_wake: push-capable adapter requires a SessionSource")
         from gateway.platforms.event import MessageEvent, MessageType

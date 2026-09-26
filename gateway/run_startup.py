@@ -531,6 +531,7 @@ class GatewayStartupMixin:
     def _resume_pending_candidates(self, platform=None) -> Optional[list]:
         """Snapshot resume-pending entries (optionally scoped to ``platform``); None when
         enumeration failed or the restart-loop breaker tripped for this boot."""
+        from gateway.dashboard_bridge import is_dashboard_source
         try:
             with self.session_store._lock:  # noqa: SLF001 — snapshot under lock
                 self.session_store._ensure_loaded_locked()  # noqa: SLF001
@@ -539,6 +540,7 @@ class GatewayStartupMixin:
                     if entry.resume_pending
                     and not entry.suspended
                     and entry.origin is not None
+                    and not is_dashboard_source(entry.origin)
                     and entry.resume_reason in self._AUTO_RESUME_REASONS
                     and (platform is None or entry.origin.platform == platform)
                 ]
