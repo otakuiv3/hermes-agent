@@ -275,13 +275,7 @@ def _tool_defs_cache_key(
         frozenset(disabled_toolsets) if disabled_toolsets else None, registry._generation, cfg_fp,
         bool(os.environ.get("HERMES_KANBAN_TASK")), bool(skip_tool_search_assembly),
         _is_delegated_child_context(), _is_dispatcher_owned_worker(), profile_scope,
-        _dashboard_progressive_tools(),
     )
-
-
-def _dashboard_progressive_tools() -> bool:
-    from tools.memory_scope import memory_namespace
-    return bool(memory_namespace.get())
 
 
 def _apply_toolset_selection(tools: set, names: List[str], quiet_mode: bool, *, disable: bool) -> None:

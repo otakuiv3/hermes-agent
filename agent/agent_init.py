@@ -1297,16 +1297,12 @@ def _init_memory(agent, _agent_cfg, skip_memory, platform, memory_manager=None):
 
     # External memory provider plugin (one at a time, alongside built-in): memory.provider.
     agent._memory_manager = None
-    from tools.memory_scope import memory_namespace
-    # Plugins do not share a guaranteed per-user namespace contract. Never
-    # inject a global provider's personal memory into an authenticated admin.
-    _external_memory_allowed = not skip_memory and not memory_namespace.get()
-    if memory_manager is not None and _external_memory_allowed:
+    if memory_manager is not None and not skip_memory:
         # A caller that rebuilds the agent per turn (gateway api_server) hands back the session's
         # already-initialized manager: providers keep their prefetch/retain state across turns instead
         # of being re-initialized (#120116). No initialize_all — the providers are already bound.
         agent._memory_manager = memory_manager
-    elif _external_memory_allowed:
+    elif not skip_memory:
         try:
             _mem_provider_name = mem_config.get("provider", "") if mem_config else ""
             if not is_core_memory_provider(_mem_provider_name):
@@ -1482,17 +1478,6 @@ def _compression_codex_settings(cfg: Dict[str, Any]) -> tuple[str, bool, Optiona
 def _parse_compression_config(agent, _agent_cfg) -> CompressionSettings:
     """Parse the ``compression`` section. Defaults here MUST match DEFAULT_CONFIG."""
     cfg = _cfg_dict(_agent_cfg, "compression")
-    from tools.memory_scope import memory_namespace
-    if memory_namespace.get():
-        cfg = dict(cfg)
-        # Keep all tools, but prune large old tool results before needing an
-        # expensive summary and stop repeating failed compaction rounds.
-        raw_threshold = cfg.get("threshold", 0.5)
-        cfg["threshold"] = min(raw_threshold, 0.5) if isinstance(raw_threshold, (int, float)) and 0 < raw_threshold <= 1 else 0.5
-        cfg["max_attempts"] = 1
-        cfg["proactive_prune_tokens"] = max(1, _parse_config_int(cfg.get("proactive_prune_tokens"), 10000) or 10000)
-        cfg["proactive_prune_min_result_chars"] = max(1, _parse_config_int(cfg.get("proactive_prune_min_result_chars"), 4000) or 4000)
-        cfg["proactive_prune_min_reclaim_tokens"] = max(1, _parse_config_int(cfg.get("proactive_prune_min_reclaim_tokens"), 1024) or 1024)
     threshold, autoraise_notice_enabled = _compression_threshold(agent, cfg)
     # Plain int()/float() coercions raise on garbage; evaluated up front, in config order.
     target_ratio = float(cfg.get("target_ratio", 0.20))
@@ -1851,13 +1836,6 @@ def _resolve_context_length(agent, _agent_cfg, base_url):
                 _config_context_length = int(_cp_ctx_resolved)
         if _config_context_length is None:
             _warn_invalid_custom_provider_context_length(agent, _custom_providers)
-
-    from tools.memory_scope import memory_namespace
-    if memory_namespace.get():
-        from agent.chat_request_budget import dashboard_request_budget
-        request_budget = dashboard_request_budget(_agent_cfg, agent.model, base_url)
-        if request_budget is not None:
-            _config_context_length = min(_config_context_length or request_budget, request_budget)
 
     # Persisted for switch_model / fallback AFTER the custom_providers branch (per-model overrides).
     agent._config_context_length = _config_context_length

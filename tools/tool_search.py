@@ -29,7 +29,6 @@ from tools.connectors.search import (
     connections_in_scope, connector_entries_by_group, connectors_unavailable, remote_schemas_for)
 
 logger = logging.getLogger("tools.tool_search")
-_DASHBOARD_DIRECT_TOOLS = frozenset({"memory", "clarify", "skills_list", "skill_view"})
 # Bound the work one bridge call requests. Search is capped at the gateway's
 # own limit: the connector search route answers 7 use_cases per request and
 # returns HTTP 502 for 8 or more (measured 2026-09-09), and one local call
@@ -115,17 +114,10 @@ def _config_from_loader(loader_name: str) -> ToolSearchConfig:
         import hermes_cli.config as _cfg_mod
         tools_cfg = (getattr(_cfg_mod, loader_name)() or {}).get("tools")
         tools_cfg = tools_cfg if isinstance(tools_cfg, dict) else {}
-        config = ToolSearchConfig.from_raw(tools_cfg.get("tool_search"))
+        return ToolSearchConfig.from_raw(tools_cfg.get("tool_search"))
     except Exception as e:
         logger.debug("Failed to load tool-search config: %s", e)
-        config = ToolSearchConfig.from_raw(None)
-    from tools.memory_scope import memory_namespace
-    if memory_namespace.get():
-        # Authenticated dashboard inboxes use progressive disclosure even for
-        # core tools. Grant/authorization remains the original session toolsets.
-        from dataclasses import replace
-        config = replace(config, enabled="on", listing="auto", listing_max_tokens=400)
-    return config
+        return ToolSearchConfig.from_raw(None)
 
 
 load_config = functools.partial(_config_from_loader, "load_config")
@@ -161,9 +153,6 @@ def is_deferrable_tool_name(name: str, defer_tools: Optional[frozenset] = None) 
     plugin tool). Bridge names never defer."""
     if name in BRIDGE_TOOL_NAMES:
         return False
-    from tools.memory_scope import memory_namespace
-    if memory_namespace.get():
-        return name not in _DASHBOARD_DIRECT_TOOLS
     if defer_tools is not None and name in defer_tools:
         return True
     if name in _core_tool_names():

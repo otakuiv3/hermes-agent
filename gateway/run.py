@@ -4272,8 +4272,7 @@ class GatewayRunner(
         # Async-delivery capability tells async tools whether this channel can wake a later turn. Default
         # True keeps CLI/unknown paths working; stateless adapters (api_server) declare False.
         _adapter = (getattr(self, "adapters", None) or {}).get(context.source.platform)
-        from gateway.wake import adapter_supports_push
-        _async_delivery = adapter_supports_push(_adapter, context.source)
+        _async_delivery = getattr(_adapter, "supports_async_delivery", True)
         return set_session_vars(
             platform=context.source.platform.value,
             chat_id=context.source.chat_id,
