@@ -72,6 +72,8 @@ class DashboardStore:
             CREATE TABLE IF NOT EXISTS sessions (
                 account TEXT NOT NULL, session_id TEXT NOT NULL,
                 PRIMARY KEY(account, session_id));
+            CREATE TABLE IF NOT EXISTS runtime (
+                account TEXT PRIMARY KEY, data TEXT NOT NULL);
         """)
         # A restart must not silently repeat tools with side effects.
         with self.db:
@@ -120,7 +122,24 @@ class DashboardStore:
     def snapshot(self, account):
         messages = self.db.execute("SELECT id,role,content,kind,created FROM (SELECT * FROM messages WHERE account=? ORDER BY seq DESC LIMIT 500) ORDER BY seq", (account,)).fetchall()
         request = self.db.execute("SELECT id,status,activity FROM requests WHERE account=? ORDER BY rowid DESC LIMIT 1", (account,)).fetchone()
-        return {"messages": [dict(row) for row in messages], "request": dict(request) if request else None}
+        runtime = self.db.execute("SELECT data FROM runtime WHERE account=?", (account,)).fetchone()
+        return {"messages": [dict(row) for row in messages], "request": dict(request) if request else None,
+                "runtime": json.loads(runtime["data"]) if runtime else None}
+
+    def record_runtime(self, account, result):
+        # An explicit allowlist: never store URLs, credentials, prompts or tool arguments.
+        data = {}
+        for key in ("model", "provider"):
+            value = result.get(key)
+            if isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9_.:/-]{1,160}", value) and "://" not in value:
+                data[key] = value
+        for key in ("last_prompt_tokens", "context_length", "tool_count", "tool_schema_bytes"):
+            value = result.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 10**9:
+                data[key] = int(value)
+        with self.db:
+            self.db.execute("INSERT INTO runtime(account,data) VALUES(?,?) ON CONFLICT(account) DO UPDATE SET data=excluded.data",
+                            (account, json.dumps(data)))
 
     def remember_session(self, account, session_id):
         with self.db:
@@ -197,6 +216,8 @@ class DashboardBridge:
         from gateway.platforms.event import MessageEvent, MessageType
         from gateway.session import SessionSource
         context_token = _reservation.set(token)
+        from tools.memory_scope import bind_memory_namespace, memory_namespace
+        memory_token = bind_memory_namespace(account)
         status = "failed"
         try:
             if content.startswith("/"):
@@ -228,15 +249,10 @@ class DashboardBridge:
                                  message_type=MessageType.COMMAND if content.startswith("/") else MessageType.TEXT)
             runner = self.adapter.gateway_runner
             key = runner._session_key_for_source(source)
-            # Match the existing API's model-route alias on a NEW dashboard session only.
+            # Use the same native default as Telegram. Only a user's explicit
+            # /model override should select a different model for this session.
             entry = await runner.async_session_store.get_or_create_session(source)
             self.store.remember_session(account, entry.session_id)
-            if not entry.model_override and not self.store.db.execute(
-                    "SELECT 1 FROM requests WHERE account=? AND id<>?", (account, request_id)).fetchone():
-                route = self.adapter._model_routes.get("hermes-agent")
-                if route:
-                    await runner.async_session_store.set_model_override(key, route)
-                    runner._session_model_overrides[key] = dict(route)
             # Actual BasePlatformAdapter delivery handles streaming edits, commentary,
             # final response and post-delivery background-review release exactly as IM.
             await self.adapter._process_message_background(event, key)
@@ -255,6 +271,7 @@ class DashboardBridge:
             finally:
                 self.admission.release(token)
                 _reservation.reset(context_token)
+                memory_namespace.reset(memory_token)
 
 
 async def guarded_gateway_message(runner, event, invoke):

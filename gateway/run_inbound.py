@@ -1272,8 +1272,15 @@ class GatewayInboundMixin:
             return event, source, is_internal
 
     async def _handle_message(self, event: MessageEvent) -> Optional[str]:
-        from gateway.dashboard_bridge import guarded_gateway_message
-        return await guarded_gateway_message(self, event, self._handle_message_admitted)
+        from gateway.dashboard_bridge import guarded_gateway_message, is_dashboard_source, PREFIX
+        if not is_dashboard_source(event.source):
+            return await guarded_gateway_message(self, event, self._handle_message_admitted)
+        from tools.memory_scope import bind_memory_namespace, memory_namespace
+        memory_token = bind_memory_namespace(str(event.source.chat_id)[len(PREFIX):])
+        try:
+            return await guarded_gateway_message(self, event, self._handle_message_admitted)
+        finally:
+            memory_namespace.reset(memory_token)
 
     async def _handle_message_admitted(self, event: MessageEvent) -> Optional[str]:
         """Handle an incoming message from any platform: auth → command check → running-agent

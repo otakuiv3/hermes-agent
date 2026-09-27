@@ -37,6 +37,9 @@ _memory_surface_flags: ContextVar[Optional[Tuple[bool, bool]]] = ContextVar("mem
 
 def get_memory_dir() -> Path:
     """Profile-scoped memories dir, resolved per call (HERMES_HOME may switch after import)."""
+    from tools.memory_scope import memory_namespace
+    if account := memory_namespace.get():
+        return get_hermes_home() / "dashboard-memories" / account
     return get_hermes_home() / "memories"
 
 

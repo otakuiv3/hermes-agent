@@ -1961,11 +1961,18 @@ class TurnRunner:
         agent = ctx.agent_holder[0]
         has_comp = bool(agent) and hasattr(agent, "context_compressor")
         comp = agent.context_compressor if has_comp else None
+        # Diagnostics must never turn an otherwise completed turn into a delivery failure.
+        tool_schema_bytes = 0
+        with suppress(TypeError, ValueError):
+            tool_schema_bytes = len(json.dumps(getattr(agent, "tools", None) or [], ensure_ascii=False).encode("utf-8"))
         usage = {
             "last_prompt_tokens": getattr(comp, "last_prompt_tokens", 0) if has_comp else 0,
             "input_tokens": getattr(agent, "session_prompt_tokens", 0) if has_comp else 0,
             "output_tokens": getattr(agent, "session_completion_tokens", 0) if has_comp else 0,
             "model": getattr(agent, "model", None) if agent else None,
+            "provider": getattr(agent, "provider", None) if agent else None,
+            "tool_count": len(getattr(agent, "tools", None) or []),
+            "tool_schema_bytes": tool_schema_bytes,
             "context_length": (getattr(comp, "context_length", 0) or 0) if has_comp else 0,
         }
         compacted_in_place, effective_session_id, history_offset = self._sync_session_after_run(agent_history)

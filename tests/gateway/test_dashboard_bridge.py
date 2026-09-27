@@ -115,13 +115,15 @@ async def test_cancel_before_first_step_does_not_stick_busy(transport):
 
 @pytest.mark.asyncio
 async def test_native_commands_and_model_global_scope(transport):
-    _, runner, bridge = transport
+    adapter, runner, bridge = transport
+    adapter._model_routes["hermes-agent"] = {"model": "different-api-alias"}
     bridge.submit(A, "native-whoami-00001", "/whoami")
     await settle(bridge)
     snapshot = bridge.snapshot(A)
     assert snapshot["request"]["status"] == "completed"
     assert len(snapshot["messages"]) >= 2
     assert "api_server" in snapshot["messages"][-1]["content"].lower()
+    assert not runner._session_model_overrides  # Fresh inbox inherits native default.
     bridge.submit(A, "native-model-000001", "/model anything --global")
     await settle(bridge)
     assert "--global" in bridge.snapshot(A)["messages"][-1]["content"]
@@ -129,6 +131,26 @@ async def test_native_commands_and_model_global_scope(transport):
     bridge.submit(B, "native-resume-00001", "/resume " + bridge.store.sessions(A)[0])
     await settle(bridge)
     assert "حسابك فقط" in bridge.snapshot(B)["messages"][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_context_notices_are_activity_and_final_answer_is_saved(transport):
+    adapter, _, bridge = transport
+    async def handler(event):
+        assert memory_namespace.get() == A
+        await adapter.send(event.source.chat_id, "📬 No home channel is set for Api_Server. Type /sethome")
+        await adapter.send(event.source.chat_id, "🗜️ Compacting context — summarizing")
+        assert bridge.snapshot(A)["request"]["activity"]
+        await adapter.send(event.source.chat_id, "⚠️  Request payload too large (413) — compression attempt 1/3")
+        return "final **answer**"
+    from tools.memory_scope import memory_namespace
+    adapter.set_message_handler(handler)
+    bridge.submit(A, "context-notice-0001", "hello")
+    await settle(bridge)
+    snapshot = bridge.snapshot(A)
+    assert [row["content"] for row in snapshot["messages"]] == ["hello", "final **answer**"]
+    assert not snapshot["request"]["activity"]
+    assert memory_namespace.get() is None
 
 
 @pytest.mark.asyncio

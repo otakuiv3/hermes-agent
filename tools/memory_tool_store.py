@@ -93,6 +93,12 @@ class MemoryStore:
         self.memory_enabled, self.user_profile_enabled = memory_enabled, user_profile_enabled
         self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": ""}
         self._consolidation_failures = 0  # per turn; reset by reset_consolidation_failures()
+        from tools.memory_scope import memory_namespace
+        from tools.memory_tool import get_memory_dir
+        # Pin scoped stores: cached agents and deferred writes must not follow
+        # the namespace of whichever account happens to be active later.
+        self._scoped_memory_dir = get_memory_dir() if memory_namespace.get() else None
+        self._memory_dir = get_memory_dir()
 
     # Per-turn counter of failed at-capacity consolidation attempts; reset at each turn boundary by
     # reset_consolidation_failures() (#42405).
@@ -151,6 +157,20 @@ class MemoryStore:
                                "further additions are blocked until it is back under the limit.",
                                path.name, count, limit)
             self._system_prompt_snapshot[target] = self._render_block(target, [_sanitize(e, path.name) for e in entries])
+        if self._scoped_memory_dir is not None and self.memory_enabled:
+            shared = self._scoped_memory_dir.parent.parent / "memories" / "SHARED.md"
+            if shared.exists():
+                # Explicitly curated shared knowledge; never import another
+                # user's legacy MEMORY.md / USER.md into a dashboard session.
+                with shared.open(encoding="utf-8") as handle:
+                    text = handle.read(self.memory_char_limit + 1)
+                if len(text) > self.memory_char_limit:
+                    logger.warning("SHARED.md exceeds its budget; shared block skipped, private memory retained")
+                else:
+                    sanitized = _sanitize(text, "SHARED.md")
+                    self._system_prompt_snapshot["memory"] = (
+                        self._render_block("memory", [sanitized]) + "\n" + self._system_prompt_snapshot["memory"]
+                    )
 
     @staticmethod
     @contextmanager
@@ -195,10 +215,9 @@ class MemoryStore:
                 with suppress(OSError):
                     _flock(True)
 
-    @staticmethod
-    def _path_for(target: str) -> Path:
-        from tools import memory_tool  # get_memory_dir is monkeypatched there
-        return memory_tool.get_memory_dir() / ("USER.md" if target == "user" else "MEMORY.md")
+    def _path_for(self, target: str) -> Path:
+        directory = self._memory_dir
+        return directory / ("USER.md" if target == "user" else "MEMORY.md")
 
     def _entries_for(self, target: str) -> List[str]:
         return self.user_entries if target == "user" else self.memory_entries

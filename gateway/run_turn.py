@@ -1440,6 +1440,9 @@ class GatewayTurnMixin:
         # One-time prompt if no home channel is set (webhooks deliver to configured targets instead).
         if not source.platform or source.platform in (Platform.LOCAL, Platform.WEBHOOK):
             return
+        from gateway.dashboard_bridge import is_dashboard_source
+        if is_dashboard_source(source):
+            return  # This private inbox is not a shared cron/home channel.
         platform_name = source.platform.value
         env_key = _home_target_env_var(platform_name)
         # Multiplex: the home channel may live only in the profile secret scope, not os.environ.
@@ -1661,6 +1664,12 @@ class GatewayTurnMixin:
 
     async def _hmwa_post_turn_hooks(self, hook_ctx, agent_result, response):
         """agent:end hook, process-watcher scheduling, and watch-notification drain."""
+        from gateway.dashboard_bridge import ACCOUNT_RE, PREFIX
+        account = str(hook_ctx.get("chat_id", ""))[len(PREFIX):]
+        bridge = getattr(self, "_dashboard_bridge", None)
+        if bridge and hook_ctx.get("platform") == "api_server" and str(hook_ctx.get("chat_id", "")).startswith(PREFIX) and ACCOUNT_RE.fullmatch(account):
+            with suppress(Exception):
+                bridge.store.record_runtime(account, agent_result)
         await self.hooks.emit("agent:end", {
             **hook_ctx, "response": (response or "")[:500], "model": agent_result.get("model", ""),
             "provider": agent_result.get("provider", ""),
@@ -1778,6 +1787,18 @@ class GatewayTurnMixin:
                 session_entry.session_id if session_entry else "?",
             )
         elif agent_result.get("compression_exhausted") and session_entry and session_key:
+            from gateway.dashboard_bridge import is_dashboard_source
+            if is_dashboard_source(source):
+                # A 413 may come from the fixed tools/prompt or provider request
+                # limit, which a fresh conversation cannot repair. Preserve the
+                # native session until the user chooses /compress or /new.
+                return (
+                    "تعذر تقليل حجم الطلب بما يكفي للمزوّد الحالي. سجل محادثتك محفوظ. "
+                    "يمكنك تجربة /compress أو بدء سياق جديد عبر /new. "
+                    "إذا تكرر الخطأ بعد /new، فحد المزوّد لا يناسب حجم الأدوات والتعليمات؛ "
+                    "يلزم ضبط الحد الفعلي أو اختيار مزوّد يستوعب الطلب.",
+                    session_entry,
+                )
             logger.info("Auto-resetting session %s after compression exhaustion.", session_entry.session_id)
             new_entry = await self.async_session_store.reset_session(session_key)
             self._evict_cached_agent(session_key)

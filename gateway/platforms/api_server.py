@@ -4401,6 +4401,12 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         bridge = getattr(self, "_dashboard_bridge", None)
         if bridge and chat_id.startswith("dashboard-"):
             from gateway.dashboard_bridge import PREFIX
+            from gateway.dashboard_notices import dashboard_notice
+            content, kind = dashboard_notice(content)
+            if kind != "message":
+                if kind == "activity":
+                    bridge.store.activity(chat_id[len(PREFIX):], content)
+                return SendResult(success=True, message_id="activity:" + chat_id[len(PREFIX):])
             message_id = bridge.store.add(chat_id[len(PREFIX):], content)
             return SendResult(success=True, message_id=message_id)
         return SendResult(success=False, error="API server uses HTTP request/response, not send()")
@@ -4412,6 +4418,9 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
     async def edit_message(self, chat_id, message_id, content, *, finalize=False):
         bridge = getattr(self, "_dashboard_bridge", None)
         if bridge and chat_id.startswith("dashboard-"):
+            if message_id == "activity:" + chat_id[len("dashboard-"):]:
+                bridge.store.activity(chat_id[len("dashboard-"):], content)
+                return SendResult(success=True, message_id=message_id)
             return SendResult(success=bridge.store.edit(chat_id[len("dashboard-"):], message_id, content), message_id=message_id)
         return await super().edit_message(chat_id, message_id, content, finalize=finalize)
 
